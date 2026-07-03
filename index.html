@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>write_chunk — PCH edition</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; max-width: 950px; margin: 1rem auto; padding: 0 1rem; background: #1e1e1e; color: #ddd; }
+  h1 { font-size: 1.2rem; margin-bottom: .25rem; }
+  #status, #pchStatus { font-size: 13px; color: #9aa; margin: 0 0 .5rem; }
+  textarea { width: 100%; height: 420px; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 13px; background: #111; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 10px; tab-size: 4; }
+  .row { margin: 10px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button { padding: 10px 20px; font-size: 15px; cursor: pointer; background: #2d5; color: #062; border: none; border-radius: 6px; font-weight: 600; }
+  button:disabled { background: #444; color: #888; cursor: not-allowed; }
+  #output { white-space: pre-wrap; background: #000; color: #0f0; padding: 12px; min-height: 120px; border: 1px solid #444; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 13px; }
+  #output.error { color: #f55; }
+  #timing { font-size: 13px; color: #9aa; }
+  label { font-size: 13px; color: #9aa; }
+</style>
+</head>
+<body>
+
+<h1>Exercise: <code>write_chunk</code> <span style="font-size:.7em;color:#888;">(PCH edition — headers precompiled once per session)</span></h1>
+<p id="status">Loading compiler…</p>
+<p id="pchStatus">PCH: not built yet (built on first compile)</p>
+
+<textarea id="source" spellcheck="false">#include &lt;string&gt;
+#include &lt;vector&gt;
+#include &lt;sstream&gt;
+#include &lt;cassert&gt;
+#include &lt;cstdio&gt;
+#include &lt;cstdint&gt;
+
+// ============ EXERCISE ============
+// Chunk format: [4 bytes magic][4 bytes size, little-endian][size bytes of data]
+template&lt; typename T &gt;
+void write_chunk(std::string const &amp;magic, std::vector&lt; T &gt; const &amp;from, std::ostream *to_) {
+	assert(magic.size() == 4);
+	assert(to_);
+	auto &amp;to = *to_;
+
+	//write magic value:
+	//TODO: write magic value (using a single call to 'to.write')
+
+	//write size (in bytes):
+	uint32_t size = from.size() * sizeof(T);
+	to.write(reinterpret_cast&lt; char const * &gt;(&amp;size), 4);
+
+	//write data:
+	//TODO: write data to 'to' (using a single call to 'to.write')
+}
+
+// ============ TEST HARNESS ============
+struct Color { float r, g, b, a; };
+static_assert(sizeof(Color) == 16, "Color must be tightly packed");
+
+static void hex_dump(std::string const &amp;bytes) {
+	for (size_t i = 0; i &lt; bytes.size(); ++i) {
+		printf("%02x ", (unsigned char)bytes[i]);
+		if (i % 16 == 15) printf("\n");
+	}
+	if (bytes.size() % 16 != 0) printf("\n");
+}
+
+static bool check(std::string const &amp;got, std::vector&lt; uint8_t &gt; const &amp;expected, char const *name) {
+	printf("--- %s ---\n", name);
+	printf("your output (%d bytes):\n", (int)got.size());
+	hex_dump(got);
+	if (got.size() != expected.size()) {
+		printf("FAIL: expected %d bytes, got %d\n\n", (int)expected.size(), (int)got.size());
+		return false;
+	}
+	for (size_t i = 0; i &lt; expected.size(); ++i) {
+		if ((unsigned char)got[i] != expected[i]) {
+			printf("FAIL: byte %d is 0x%02x, expected 0x%02x\n\n",
+				(int)i, (unsigned char)got[i], expected[i]);
+			return false;
+		}
+	}
+	printf("PASS\n\n");
+	return true;
+}
+
+int main() {
+	bool ok = true;
+
+	{ //--- test 1: 'str0' chunk of "Hello!" ---
+		std::vector&lt; uint8_t &gt; chars = {'H','e','l','l','o','!'};
+		std::ostringstream str;
+		write_chunk("str0", chars, &amp;str);
+		std::vector&lt; uint8_t &gt; expected = {
+			's','t','r','0', 6,0,0,0, 'H','e','l','l','o','!'
+		};
+		ok = check(str.str(), expected, "str0 test") &amp;&amp; ok;
+	}
+
+	{ //--- test 2: 'col0' chunk of two Colors ---
+		std::vector&lt; Color &gt; colors = {
+			{1.0f, 0.0f, 0.0f, 1.0f},
+			{0.0f, 0.5f, 1.0f, 0.25f},
+		};
+		std::ostringstream str;
+		write_chunk("col0", colors, &amp;str);
+		std::vector&lt; uint8_t &gt; expected = {
+			'c','o','l','0', 32,0,0,0,
+			0x00,0x00,0x80,0x3f,  0,0,0,0,  0,0,0,0,  0x00,0x00,0x80,0x3f,
+			0,0,0,0,  0x00,0x00,0x00,0x3f,  0x00,0x00,0x80,0x3f,  0x00,0x00,0x00,0x3e,
+		};
+		ok = check(str.str(), expected, "col0 test") &amp;&amp; ok;
+	}
+
+	printf(ok ? "All tests passed!\n" : "Some tests FAILED (expected until you fill in the TODOs).\n");
+	return ok ? 0 : 1;
+}
+</textarea>
+
+<div class="row">
+  <button id="runBtn" disabled>Compile &amp; Run</button>
+  <span id="timing"></span>
+</div>
+
+<label>Output</label>
+<div id="output">(output appears here)</div>
+
+<!-- Cross-origin isolation via service worker, for hosts without header config (GitHub Pages etc). 
+     Harmless no-op when headers are already served (e.g. serve.py). -->
+<script>
+if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('./coi-sw.js').then(async (reg) => {
+    await navigator.serviceWorker.ready;
+    if (!sessionStorage.getItem('coi-reloaded')) {
+      sessionStorage.setItem('coi-reloaded', '1');
+      location.reload();
+    }
+  }).catch((e) => console.warn('coi-sw registration failed:', e));
+}
+</script>
+
+<script type="module">
+  import { init, Wasmer, Directory } from "https://unpkg.com/@wasmer/sdk@latest/dist/index.mjs";
+
+  const statusEl    = document.getElementById('status');
+  const pchStatusEl = document.getElementById('pchStatus');
+  const outputEl    = document.getElementById('output');
+  const runBtn      = document.getElementById('runBtn');
+  const sourceEl    = document.getElementById('source');
+  const timingEl    = document.getElementById('timing');
+
+  // The headers baked into the PCH — matches the exercise's include set:
+  const COMMON_HEADERS = [
+    "#include <string>",
+    "#include <vector>",
+    "#include <sstream>",
+    "#include <cassert>",
+    "#include <cstdio>",
+    "#include <cstdint>",
+  ].join("\n") + "\n";
+
+  let clang;
+  let project;          // ONE Directory reused across compiles, so the PCH persists
+  let pchReady = false;
+  let pchFailed = false;
+
+  function setOutput(text, isError = false) {
+    outputEl.textContent = text;
+    outputEl.classList.toggle('error', isError);
+  }
+
+  async function setup() {
+    if (!window.crossOriginIsolated) {
+      statusEl.textContent = 'Waiting for cross-origin isolation (page may reload once)…';
+      return; // the coi-sw script above will reload us into an isolated context
+    }
+    try {
+      await init();
+      statusEl.textContent = 'Downloading clang package (cached after first load)…';
+      clang = await Wasmer.fromRegistry("clang/clang");
+      window.clang = clang;
+      project = new Directory(); // persistent for the whole session
+      statusEl.textContent = 'Compiler ready.';
+      runBtn.disabled = false;
+    } catch (err) {
+      statusEl.textContent = 'Failed to load compiler: ' + err.message;
+    }
+  }
+
+  async function ensurePch() {
+    if (pchReady || pchFailed) return;
+    pchStatusEl.textContent = 'PCH: building (one-time cost this session)…';
+    const t0 = performance.now();
+    try {
+      await project.writeFile("common_headers.h", COMMON_HEADERS);
+      const job = await clang.entrypoint.run({
+        args: ["-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
+        mount: { "/project": project },
+      });
+      const res = await job.wait();
+      if (!res.ok) throw new Error(res.stderr || `exit ${res.code}`);
+      // Confirm the artifact actually exists in the virtual FS:
+      const pch = await project.readFile("stdlib.pch");
+      if (!pch || pch.length === 0) throw new Error("stdlib.pch not found after build");
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      pchStatusEl.textContent = `PCH: ready (${(pch.length / 1024 / 1024).toFixed(1)} MB, built in ${secs}s) — reused for all compiles this session`;
+      pchReady = true;
+    } catch (err) {
+      pchFailed = true;
+      pchStatusEl.textContent = 'PCH: failed (' + err.message + ') — falling back to normal compiles';
+      console.warn('PCH build failed:', err);
+    }
+  }
+
+  async function compileAndRun() {
+    runBtn.disabled = true;
+    timingEl.textContent = '';
+    setOutput('Working…');
+
+    try {
+      await ensurePch();
+
+      const t0 = performance.now();
+      await project.writeFile("main.cpp", sourceEl.value);
+
+      const args = pchReady
+        ? ["-include-pch", "/project/stdlib.pch", "/project/main.cpp", "-o", "/project/a.wasm"]
+        : ["/project/main.cpp", "-o", "/project/a.wasm"];
+
+      setOutput(pchReady ? 'Compiling (with PCH)…' : 'Compiling (no PCH)…');
+      const compile = await clang.entrypoint.run({ args, mount: { "/project": project } });
+      const compileResult = await compile.wait();
+      const tCompile = ((performance.now() - t0) / 1000).toFixed(1);
+
+      if (!compileResult.ok) {
+        timingEl.textContent = `compile failed after ${tCompile}s`;
+        setOutput("Compilation failed:\n\n" + (compileResult.stderr || `exit ${compileResult.code}`), true);
+        return;
+      }
+
+      setOutput(`Compiled in ${tCompile}s${pchReady ? ' (PCH)' : ''}. Running…`);
+
+      const wasmBytes = await project.readFile("a.wasm");
+      const program   = await Wasmer.fromFile(wasmBytes);
+      const run       = await program.entrypoint.run();
+      const runResult = await run.wait();
+      const tTotal = ((performance.now() - t0) / 1000).toFixed(1);
+
+      timingEl.textContent = `compile ${tCompile}s · total ${tTotal}s${pchReady ? ' · PCH on' : ''}`;
+
+      let out = runResult.stdout || '';
+      if (runResult.stderr) out += "\n[stderr]\n" + runResult.stderr;
+      out += `\n\n[exit code ${runResult.code}]`;
+      setOutput(out, false);
+
+    } catch (err) {
+      setOutput("Error:\n" + err.message, true);
+    } finally {
+      runBtn.disabled = false;
+    }
+  }
+
+  runBtn.addEventListener('click', compileAndRun);
+  setup();
+</script>
+
+</body>
+</html>
