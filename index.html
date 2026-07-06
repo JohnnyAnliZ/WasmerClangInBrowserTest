@@ -188,10 +188,11 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
   // Different clang versions are picky about how a PCH is generated.
   // We try several known-good invocations until one produces a usable file.
   const PCH_COMMANDS = [
-    // frontend flag, most explicit — bypasses driver output-count guessing:
+    // --precompile: driver flag whose sole job is "stop after precompiling a
+    // header" — guaranteed never to invoke wasm-ld (the fix for clang 16 here):
+    ["--precompile", "-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
+    // frontend flag fallback:
     ["-Xclang", "-emit-pch", "-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
-    // driver form with -c:
-    ["-c", "-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
     // let clang choose the output name (.gch), no -o at all:
     ["-x", "c++-header", "/project/common_headers.h"],
   ];
@@ -291,3 +292,4 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
 
 </body>
 </html>
+
