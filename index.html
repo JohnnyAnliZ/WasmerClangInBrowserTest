@@ -21,7 +21,6 @@
 </head>
 <body>
 
-	
 <h1>Exercise: <code>write_chunk</code> <span style="font-size:.7em;color:#888;">(PCH edition — headers precompiled once per session)</span></h1>
 <p id="status">Loading compiler…</p>
 <p id="pchStatus">PCH: not built yet (built on first compile)</p>
@@ -64,7 +63,6 @@ static void hex_dump(std::string const &amp;bytes) {
 	if (bytes.size() % 16 != 0) printf("\n");
 }
 
-	
 static bool check(std::string const &amp;got, std::vector&lt; uint8_t &gt; const &amp;expected, char const *name) {
 	printf("--- %s ---\n", name);
 	printf("your output (%d bytes):\n", (int)got.size());
@@ -187,29 +185,55 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
     }
   }
 
+  // Different clang versions are picky about how a PCH is generated.
+  // We try several known-good invocations until one produces a usable file.
+  const PCH_COMMANDS = [
+    // frontend flag, most explicit — bypasses driver output-count guessing:
+    ["-Xclang", "-emit-pch", "-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
+    // driver form with -c:
+    ["-c", "-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
+    // let clang choose the output name (.gch), no -o at all:
+    ["-x", "c++-header", "/project/common_headers.h"],
+  ];
+
+  async function tryPchCommand(args) {
+    const job = await clang.entrypoint.run({ args, mount: { "/project": project } });
+    const res = await job.wait();
+    if (!res.ok) return { ok: false, stderr: res.stderr || `exit ${res.code}` };
+    // Figure out which output file to look for:
+    const outIdx = args.indexOf("-o");
+    const outName = outIdx >= 0 ? args[outIdx + 1].replace("/project/", "")
+                                : "common_headers.h.gch";
+    try {
+      const pch = await project.readFile(outName);
+      if (pch && pch.length > 0) return { ok: true, bytes: pch, outName };
+    } catch (_) {}
+    return { ok: false, stderr: "no output file produced (" + outName + ")" };
+  }
+
   async function ensurePch() {
     if (pchReady || pchFailed) return;
     pchStatusEl.textContent = 'PCH: building (one-time cost this session)…';
     const t0 = performance.now();
-    try {
-      await project.writeFile("common_headers.h", COMMON_HEADERS);
-      const job = await clang.entrypoint.run({
-        args: ["-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
-        mount: { "/project": project },
-      });
-      const res = await job.wait();
-      if (!res.ok) throw new Error(res.stderr || `exit ${res.code}`);
-      // Confirm the artifact actually exists in the virtual FS:
-      const pch = await project.readFile("stdlib.pch");
-      if (!pch || pch.length === 0) throw new Error("stdlib.pch not found after build");
-      const secs = ((performance.now() - t0) / 1000).toFixed(1);
-      pchStatusEl.textContent = `PCH: ready (${(pch.length / 1024 / 1024).toFixed(1)} MB, built in ${secs}s) — reused for all compiles this session`;
-      pchReady = true;
-    } catch (err) {
-      pchFailed = true;
-      pchStatusEl.textContent = 'PCH: failed (' + err.message + ') — falling back to normal compiles';
-      console.warn('PCH build failed:', err);
+    await project.writeFile("common_headers.h", COMMON_HEADERS);
+
+    let lastErr = "";
+    for (let i = 0; i < PCH_COMMANDS.length; i++) {
+      pchStatusEl.textContent = `PCH: building (attempt ${i + 1}/${PCH_COMMANDS.length})…`;
+      const r = await tryPchCommand(PCH_COMMANDS[i]);
+      if (r.ok) {
+        window.__pchName = r.outName;               // remember for -include-pch
+        const secs = ((performance.now() - t0) / 1000).toFixed(1);
+        pchStatusEl.textContent =
+          `PCH: ready (${(r.bytes.length / 1024 / 1024).toFixed(1)} MB, built in ${secs}s, via "${PCH_COMMANDS[i].join(' ')}") — reused all session`;
+        pchReady = true;
+        return;
+      }
+      lastErr = r.stderr;
     }
+    pchFailed = true;
+    pchStatusEl.textContent = 'PCH: all attempts failed (' + lastErr + ') — using normal compiles';
+    console.warn('PCH build failed after all attempts:', lastErr);
   }
 
   async function compileAndRun() {
@@ -223,8 +247,9 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
       const t0 = performance.now();
       await project.writeFile("main.cpp", sourceEl.value);
 
+      const pchPath = "/project/" + (window.__pchName || "stdlib.pch");
       const args = pchReady
-        ? ["-include-pch", "/project/stdlib.pch", "/project/main.cpp", "-o", "/project/a.wasm"]
+        ? ["-include-pch", pchPath, "/project/main.cpp", "-o", "/project/a.wasm"]
         : ["/project/main.cpp", "-o", "/project/a.wasm"];
 
       setOutput(pchReady ? 'Compiling (with PCH)…' : 'Compiling (no PCH)…');
