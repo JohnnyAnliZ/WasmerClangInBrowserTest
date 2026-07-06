@@ -1,0 +1,59 @@
+name: Deploy static site to Pages
+
+on:
+  # Deploy on every push to main:
+  push:
+    branches: ["main"]
+  # Let you trigger a fresh run by hand from the Actions tab:
+  workflow_dispatch:
+
+# GITHUB_TOKEN permissions required to deploy to Pages:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one deploy at a time; don't cancel an in-progress production deploy:
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Folder to publish. "." = repo root (where your index.html lives).
+          path: "."
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # If the deploy job failed, automatically re-run the whole workflow,
+  # up to 3 total attempts. Waits a bit first so transient GitHub-side
+  # incidents have a moment to clear.
+  retry-on-failure:
+    needs: [deploy]
+    if: failure() && fromJSON(github.run_attempt) < 3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait, then re-run the failed workflow
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Deploy failed on attempt ${{ github.run_attempt }}. Waiting 60s before retry..."
+          sleep 60
+          gh run rerun ${{ github.run_id }} --failed
