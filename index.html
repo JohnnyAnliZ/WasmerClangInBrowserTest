@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>write_chunk — PCH edition</title>
+<title>write_chunk</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, sans-serif; max-width: 950px; margin: 1rem auto; padding: 0 1rem; background: #1e1e1e; color: #ddd; }
   h1 { font-size: 1.2rem; margin-bottom: .25rem; }
-  #status, #pchStatus { font-size: 13px; color: #9aa; margin: 0 0 .5rem; }
+  #status { font-size: 13px; color: #9aa; margin: 0 0 .5rem; }
   textarea { width: 100%; height: 420px; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 13px; background: #111; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 10px; tab-size: 4; }
   .row { margin: 10px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   button { padding: 10px 20px; font-size: 15px; cursor: pointer; background: #2d5; color: #062; border: none; border-radius: 6px; font-weight: 600; }
@@ -21,9 +21,8 @@
 </head>
 <body>
 
-<h1>Exercise: <code>write_chunk</code> <span style="font-size:.7em;color:#888;">(PCH edition — headers precompiled once per session)</span></h1>
+<h1>Exercise: <code>write_chunk</code></h1>
 <p id="status">Loading compiler…</p>
-<p id="pchStatus">PCH: not built yet (built on first compile)</p>
 
 <textarea id="source" spellcheck="false">#include &lt;string&gt;
 #include &lt;vector&gt;
@@ -141,26 +140,13 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
   import { init, Wasmer, Directory } from "https://unpkg.com/@wasmer/sdk@latest/dist/index.mjs";
 
   const statusEl    = document.getElementById('status');
-  const pchStatusEl = document.getElementById('pchStatus');
   const outputEl    = document.getElementById('output');
   const runBtn      = document.getElementById('runBtn');
   const sourceEl    = document.getElementById('source');
   const timingEl    = document.getElementById('timing');
 
-  // The headers baked into the PCH — matches the exercise's include set:
-  const COMMON_HEADERS = [
-    "#include <string>",
-    "#include <vector>",
-    "#include <sstream>",
-    "#include <cassert>",
-    "#include <cstdio>",
-    "#include <cstdint>",
-  ].join("\n") + "\n";
-
   let clang;
-  let project;          // ONE Directory reused across compiles, so the PCH persists
-  let pchReady = false;
-  let pchFailed = false;
+  let project;          // ONE Directory reused across compiles
 
   function setOutput(text, isError = false) {
     outputEl.textContent = text;
@@ -185,75 +171,18 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
     }
   }
 
-  // Different clang versions are picky about how a PCH is generated.
-  // We try several known-good invocations until one produces a usable file.
-  const PCH_COMMANDS = [
-    // --precompile: driver flag whose sole job is "stop after precompiling a
-    // header" — guaranteed never to invoke wasm-ld (the fix for clang 16 here):
-    ["--precompile", "-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
-    // frontend flag fallback:
-    ["-Xclang", "-emit-pch", "-x", "c++-header", "/project/common_headers.h", "-o", "/project/stdlib.pch"],
-    // let clang choose the output name (.gch), no -o at all:
-    ["-x", "c++-header", "/project/common_headers.h"],
-  ];
-
-  async function tryPchCommand(args) {
-    const job = await clang.entrypoint.run({ args, mount: { "/project": project } });
-    const res = await job.wait();
-    if (!res.ok) return { ok: false, stderr: res.stderr || `exit ${res.code}` };
-    // Figure out which output file to look for:
-    const outIdx = args.indexOf("-o");
-    const outName = outIdx >= 0 ? args[outIdx + 1].replace("/project/", "")
-                                : "common_headers.h.gch";
-    try {
-      const pch = await project.readFile(outName);
-      if (pch && pch.length > 0) return { ok: true, bytes: pch, outName };
-    } catch (_) {}
-    return { ok: false, stderr: "no output file produced (" + outName + ")" };
-  }
-
-  async function ensurePch() {
-    if (pchReady || pchFailed) return;
-    pchStatusEl.textContent = 'PCH: building (one-time cost this session)…';
-    const t0 = performance.now();
-    await project.writeFile("common_headers.h", COMMON_HEADERS);
-
-    let lastErr = "";
-    for (let i = 0; i < PCH_COMMANDS.length; i++) {
-      pchStatusEl.textContent = `PCH: building (attempt ${i + 1}/${PCH_COMMANDS.length})…`;
-      const r = await tryPchCommand(PCH_COMMANDS[i]);
-      if (r.ok) {
-        window.__pchName = r.outName;               // remember for -include-pch
-        const secs = ((performance.now() - t0) / 1000).toFixed(1);
-        pchStatusEl.textContent =
-          `PCH: ready (${(r.bytes.length / 1024 / 1024).toFixed(1)} MB, built in ${secs}s, via "${PCH_COMMANDS[i].join(' ')}") — reused all session`;
-        pchReady = true;
-        return;
-      }
-      lastErr = r.stderr;
-    }
-    pchFailed = true;
-    pchStatusEl.textContent = 'PCH: all attempts failed (' + lastErr + ') — using normal compiles';
-    console.warn('PCH build failed after all attempts:', lastErr);
-  }
-
   async function compileAndRun() {
     runBtn.disabled = true;
     timingEl.textContent = '';
     setOutput('Working…');
 
     try {
-      await ensurePch();
-
       const t0 = performance.now();
       await project.writeFile("main.cpp", sourceEl.value);
 
-      const pchPath = "/project/" + (window.__pchName || "stdlib.pch");
-      const args = pchReady
-        ? ["-include-pch", pchPath, "/project/main.cpp", "-o", "/project/a.wasm"]
-        : ["/project/main.cpp", "-o", "/project/a.wasm"];
+      const args = ["/project/main.cpp", "-o", "/project/a.wasm"];
 
-      setOutput(pchReady ? 'Compiling (with PCH)…' : 'Compiling (no PCH)…');
+      setOutput('Compiling…');
       const compile = await clang.entrypoint.run({ args, mount: { "/project": project } });
       const compileResult = await compile.wait();
       const tCompile = ((performance.now() - t0) / 1000).toFixed(1);
@@ -264,7 +193,7 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
         return;
       }
 
-      setOutput(`Compiled in ${tCompile}s${pchReady ? ' (PCH)' : ''}. Running…`);
+      setOutput(`Compiled in ${tCompile}s. Running…`);
 
       const wasmBytes = await project.readFile("a.wasm");
       const program   = await Wasmer.fromFile(wasmBytes);
@@ -272,7 +201,7 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
       const runResult = await run.wait();
       const tTotal = ((performance.now() - t0) / 1000).toFixed(1);
 
-      timingEl.textContent = `compile ${tCompile}s · total ${tTotal}s${pchReady ? ' · PCH on' : ''}`;
+      timingEl.textContent = `compile ${tCompile}s · total ${tTotal}s`;
 
       let out = runResult.stdout || '';
       if (runResult.stderr) out += "\n[stderr]\n" + runResult.stderr;
