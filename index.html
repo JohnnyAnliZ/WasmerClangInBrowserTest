@@ -189,23 +189,67 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
     runBtn.disabled = true;
     timingEl.textContent = '';
     setCompileLog('');
-    setOutput('Working…');
+
+    const t0 = performance.now();
+    // Compiling <sstream> et al. from scratch is slow (tens of seconds on a
+    // cold session), and clang is silent while it works. Tick a live
+    // elapsed-time counter so the page visibly progresses instead of sitting
+    // on a frozen "Compiling…".
+    const renderProgress = () => {
+      const s = ((performance.now() - t0) / 1000).toFixed(0);
+      setOutput(
+        `Compiling… ${s}s\n\n` +
+        `The first compile in a session is slow: clang parses the C++ standard\n` +
+        `headers (<sstream>, <vector>, …) from scratch. Later compiles in this\n` +
+        `tab reuse the warm compiler and are much faster.`
+      );
+    };
+    renderProgress();
+    const ticker = setInterval(renderProgress, 200);
 
     try {
-      const t0 = performance.now();
       await project.writeFile("main.cpp", sourceEl.value);
 
-      const args = ["/project/main.cpp", "-o", "/project/a.wasm"];
+      // -v makes clang print what it actually does (version/target, the header
+      // search paths, and the frontend + wasm-ld invocations) — that's the
+      // compilation log we surface below.
+      const args = ["-v", "/project/main.cpp", "-o", "/project/a.wasm"];
 
-      setOutput('Compiling…');
       const compile = await clang.entrypoint.run({ args, mount: { "/project": project } });
+
+      // Stream clang's output into the log as it arrives, so warnings/errors
+      // appear the moment they're emitted instead of only at the end. We read
+      // the streams ourselves with getReader() loops (iOS Safari doesn't
+      // support async-iterating a ReadableStream). NOTE: draining the streams
+      // here means compileResult.stdout/stderr come back empty — we build the
+      // log from `streamed` and use wait() only for ok/code.
+      const dec = new TextDecoder();
+      let streamed = "";
+      const pump = async (stream) => {
+        try {
+          const reader = stream.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            streamed += dec.decode(value, { stream: true });
+            setCompileLog(streamed);
+            compileLogEl.scrollTop = compileLogEl.scrollHeight;
+          }
+        } catch (e) {
+          streamed += `\n[log stream error: ${e.message}]`;
+        }
+      };
+      const drained = Promise.all([pump(compile.stdout), pump(compile.stderr)]);
+
       const compileResult = await compile.wait();
+      await drained;                 // flush any remaining buffered chunks
+      clearInterval(ticker);
       const tCompile = ((performance.now() - t0) / 1000).toFixed(1);
 
-      // clang writes all its diagnostics (warnings + errors) to stderr;
-      // surface them for every compile, not just failures.
-      const diagnostics = [compileResult.stdout, compileResult.stderr]
-        .filter(Boolean).join('\n').trim();
+      // Prefer the live-streamed text; fall back to wait()'s buffers in case
+      // the streams yielded nothing on some runtime.
+      const diagnostics = streamed.trim() ||
+        [compileResult.stdout, compileResult.stderr].filter(Boolean).join('\n').trim();
 
       if (!compileResult.ok) {
         timingEl.textContent = `compile failed after ${tCompile}s`;
@@ -214,7 +258,7 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
         return;
       }
 
-      setCompileLog(diagnostics || `Compiled cleanly in ${tCompile}s (no warnings).`);
+      setCompileLog(diagnostics || `Compiled in ${tCompile}s.`);
       setOutput(`Compiled in ${tCompile}s. Running…`);
 
       const wasmBytes = await project.readFile("a.wasm");
@@ -231,8 +275,10 @@ if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecu
       setOutput(out, false);
 
     } catch (err) {
+      clearInterval(ticker);
       setOutput("Error:\n" + err.message, true);
     } finally {
+      clearInterval(ticker);
       runBtn.disabled = false;
     }
   }
